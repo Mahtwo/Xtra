@@ -114,14 +114,18 @@ class GamePagerViewModel @Inject constructor(
         }
     }
 
-    fun isFollowingGame(gameId: String?, gameName: String?, setting: Int, networkLibrary: String?, gqlHeaders: Map<String, String>) {
+    fun isFollowingGame(gameId: String?, gameSlug: String?, gameName: String?, setting: Int, networkLibrary: String?, gqlHeaders: Map<String, String>) {
         if (_isFollowing.value == null) {
             viewModelScope.launch {
                 try {
                     val isFollowing = if (setting == 0 && !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank()) {
-                        gameName?.let {
-                            graphQLRepository.loadFollowingGame(networkLibrary, gqlHeaders, gameName).data?.game?.self?.follow != null
-                        } == true
+                        graphQLRepository.loadQueryFollowingGame(
+                            networkLibrary = networkLibrary,
+                            headers = gqlHeaders,
+                            id = gameId,
+                            slug = gameSlug.takeIf { gameId.isNullOrBlank() },
+                            name = gameName.takeIf { gameId.isNullOrBlank() && gameSlug.isNullOrBlank() },
+                        ).data?.game?.self?.follow?.followedAt != null
                     } else {
                         gameId?.let {
                             localFollowsGame.getFollowByGameId(it)
