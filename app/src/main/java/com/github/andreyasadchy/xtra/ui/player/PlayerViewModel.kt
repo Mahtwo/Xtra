@@ -697,25 +697,27 @@ class PlayerViewModel @Inject constructor(
         if (_isFollowing.value == null) {
             viewModelScope.launch {
                 try {
-                    if (!channelId.isNullOrBlank()) {
-                        if (setting == 0 && !gqlHeaders[C.HEADER_TOKEN].isNullOrBlank() && userId != channelId) {
-                            val response = try {
-                                if (gqlHeaders[C.HEADER_TOKEN].isNullOrBlank() || channelLogin == null) throw Exception()
-                                val follower = graphQLRepository.loadFollowingUser(networkLibrary, gqlHeaders, channelLogin).data?.user?.self?.follower
-                                Pair(follower != null, follower?.disableNotifications == false)
-                            } catch (e: Exception) {
-                                val following = helixRepository.getUserFollows(
-                                    networkLibrary = networkLibrary,
-                                    headers = helixHeaders,
-                                    userId = userId,
-                                    targetId = channelId,
-                                ).data.firstOrNull()?.channelId == channelId
-                                Pair(following, null)
-                            }
-                            _isFollowing.value = response.first
-                        } else {
-                            _isFollowing.value = localFollowsChannel.getFollowByUserId(channelId) != null
+                    if (setting == 0 && userId != channelId) {
+                        try {
+                            if (gqlHeaders[C.HEADER_TOKEN].isNullOrBlank()) throw Exception()
+                            val follower = graphQLRepository.loadQueryFollowingUser(
+                                networkLibrary = networkLibrary,
+                                headers = gqlHeaders,
+                                id = channelId,
+                                login = channelLogin.takeIf { channelId.isNullOrBlank() },
+                            ).data?.user?.self?.follower
+                            _isFollowing.value = follower?.followedAt != null
+                        } catch (e: Exception) {
+                            val following = helixRepository.getUserFollows(
+                                networkLibrary = networkLibrary,
+                                headers = helixHeaders,
+                                userId = userId,
+                                targetId = channelId,
+                            ).data.firstOrNull()?.channelId == channelId
+                            _isFollowing.value = following
                         }
+                    } else {
+                        _isFollowing.value = channelId?.let { localFollowsChannel.getFollowByUserId(it) } != null
                     }
                 } catch (e: Exception) {
 
