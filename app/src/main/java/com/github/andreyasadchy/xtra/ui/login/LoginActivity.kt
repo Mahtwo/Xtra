@@ -26,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebResourceErrorCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewClientCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.github.andreyasadchy.xtra.R
 import com.github.andreyasadchy.xtra.databinding.ActivityLoginBinding
@@ -60,6 +61,7 @@ class LoginActivity : AppCompatActivity() {
     private var userId: String? = null
     private var userLogin: String? = null
     private var readHeaders = false
+    private var readHeaders2 = false
     private var checkUrl = false
 
     private lateinit var binding: ActivityLoginBinding
@@ -160,83 +162,10 @@ class LoginActivity : AppCompatActivity() {
                     "&client_id=${helixClientId}" +
                     "&redirect_uri=${helixRedirect}" +
                     "&scope=${URLEncoder.encode(helixScopes.joinToString(" "), Charsets.UTF_8.name())}"
-            webViewContainer.visibility = View.VISIBLE
+            webView.visibility = View.VISIBLE
             textZoom.visibility = View.VISIBLE
-            havingTrouble.setOnClickListener {
-                this@LoginActivity.getAlertDialogBuilder()
-                    .setMessage(getString(R.string.login_problem_solution))
-                    .setPositiveButton(R.string.log_in) { _, _ ->
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, helixAuthUrl.toUri()).apply {
-                                addCategory(Intent.CATEGORY_BROWSABLE)
-                            }
-                            startActivity(intent)
-                            webView.reload()
-                        } catch (e: ActivityNotFoundException) {
-                            Toast.makeText(this@LoginActivity, R.string.no_browser_found, Toast.LENGTH_LONG).show()
-                        }
-                    }
-                    .setNeutralButton(R.string.to_enter_url) { _, _ ->
-                        val editText = EditText(this@LoginActivity).apply {
-                            layoutParams = LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                LinearLayout.LayoutParams.WRAP_CONTENT
-                            )
-                        }
-                        this@LoginActivity.getAlertDialogBuilder()
-                            .setTitle(R.string.enter_url)
-                            .setView(LinearLayout(this@LoginActivity).apply {
-                                addView(editText)
-                                val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20f, resources.displayMetrics).toInt()
-                                setPadding(padding, 0, padding, 0)
-                            })
-                            .setPositiveButton(R.string.log_in) { _, _ ->
-                                val text = editText.text
-                                if (text.isNotEmpty()) {
-                                    val matcher = tokenPattern.matcher(text)
-                                    if (matcher.find()) {
-                                        val token = matcher.group(1)
-                                        if (!token.isNullOrBlank()) {
-                                            lifecycleScope.launch {
-                                                val valid = validateHelixToken(networkLibrary, helixClientId, token)
-                                                if (valid) {
-                                                    helixToken = token
-                                                    done()
-                                                } else {
-                                                    Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        } else {
-                                            Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                        }
-                                    } else {
-                                        Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                            .setNegativeButton(android.R.string.cancel, null)
-                            .show()
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-            }
-            textZoom.setOnClickListener {
-                val slider = Slider(this@LoginActivity).apply {
-                    value = (webView.settings.textZoom.toFloat() / 100)
-                }
-                this@LoginActivity.getAlertDialogBuilder()
-                    .setTitle(getString(R.string.text_size))
-                    .setView(LinearLayout(this@LoginActivity).apply {
-                        addView(slider)
-                        val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10f, resources.displayMetrics).toInt()
-                        setPadding(padding, 0, padding, 0)
-                    })
-                    .setPositiveButton(getString(android.R.string.ok)) { _, _ ->
-                        webView.settings.textZoom = (slider.value * 100).roundToInt()
-                    }
-                    .setNegativeButton(getString(android.R.string.cancel), null)
-                    .show()
-            }
+            havingTrouble.visibility = View.VISIBLE
+            setupButtons(networkLibrary, helixClientId, helixAuthUrl)
             CookieManager.getInstance().removeAllCookies(null)
             val isLightTheme = obtainStyledAttributes(intArrayOf(androidx.appcompat.R.attr.isLightTheme)).use {
                 it.getBoolean(0, false)
@@ -266,10 +195,10 @@ class LoginActivity : AppCompatActivity() {
                         }?.value?.removePrefix("OAuth ")
                         if (!token.isNullOrBlank()) {
                             val clientId = webViewRequest.requestHeaders.entries.firstOrNull { it.key.equals(C.HEADER_CLIENT_ID, true) }?.value
-                            if (prefs().getBoolean(C.ENABLE_INTEGRITY, false)) {
-                                readHeaders = false
-                                lifecycleScope.launch {
-                                    val valid = validateGQLToken(networkLibrary, clientId, token)
+                            readHeaders = false
+                            lifecycleScope.launch {
+                                val valid = validateGQLToken(networkLibrary, clientId, token)
+                                if (prefs().getBoolean(C.ENABLE_INTEGRITY, false)) {
                                     if (valid) {
                                         TwitchApiHelper.checkedValidation = true
                                         tokenPrefs().edit {
@@ -295,49 +224,32 @@ class LoginActivity : AppCompatActivity() {
                                             view.loadUrl("https://www.twitch.tv/login")
                                         }
                                     }
-                                }
-                            } else {
-                                if (gqlWebToken.isNullOrBlank()) {
-                                    readHeaders = false
-                                    lifecycleScope.launch {
-                                        val valid = validateGQLToken(networkLibrary, clientId, token)
-                                        if (valid) {
-                                            gqlWebClientId = clientId
-                                            gqlWebToken = token
-                                            readHeaders = true
-                                            webView.loadUrl("https://android.tv.twitch.tv/login")
-                                        } else {
-                                            if (!helixToken.isNullOrBlank()) {
-                                                done()
-                                            } else {
-                                                error()
-                                                readHeaders = true
-                                                view.loadUrl("https://www.twitch.tv/login")
-                                            }
-                                        }
-                                    }
                                 } else {
-                                    if (!clientId.isNullOrBlank() && clientId != gqlWebClientId) {
-                                        readHeaders = false
-                                        lifecycleScope.launch {
-                                            val valid = if (token == gqlWebToken) {
-                                                true
-                                            } else {
-                                                validateGQLToken(networkLibrary, gqlWebClientId, token)
+                                    if (valid) {
+                                        gqlWebClientId = clientId
+                                        gqlWebToken = token
+                                        var getTvToken = false
+                                        this@LoginActivity.getAlertDialogBuilder()
+                                            .setMessage(getString(R.string.tv_login_message))
+                                            .setPositiveButton(android.R.string.ok) { _, _ ->
+                                                getTvToken = true
                                             }
-                                            if (valid) {
-                                                gqlClientId = clientId
-                                                gqlToken = token
-                                                done()
-                                            } else {
-                                                if (!helixToken.isNullOrBlank()) {
-                                                    done()
+                                            .setNegativeButton(getString(android.R.string.cancel), null)
+                                            .setOnDismissListener {
+                                                if (getTvToken) {
+                                                    setupSecondaryWebView(networkLibrary, helixClientId, helixAuthUrl, isLightTheme)
                                                 } else {
-                                                    error()
-                                                    readHeaders = true
-                                                    view.loadUrl("https://www.twitch.tv/login")
+                                                    done()
                                                 }
                                             }
+                                            .show()
+                                    } else {
+                                        if (!helixToken.isNullOrBlank()) {
+                                            done()
+                                        } else {
+                                            error()
+                                            readHeaders = true
+                                            view.loadUrl("https://www.twitch.tv/login")
                                         }
                                     }
                                 }
@@ -410,6 +322,181 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupButtons(networkLibrary: String?, helixClientId: String?, helixAuthUrl: String) {
+        with(binding) {
+            textZoom.setOnClickListener {
+                val slider = Slider(this@LoginActivity).apply {
+                    value = (webView.settings.textZoom.toFloat() / 100)
+                }
+                this@LoginActivity.getAlertDialogBuilder()
+                    .setTitle(getString(R.string.text_size))
+                    .setView(LinearLayout(this@LoginActivity).apply {
+                        addView(slider)
+                        val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10f, resources.displayMetrics).toInt()
+                        setPadding(padding, 0, padding, 0)
+                    })
+                    .setPositiveButton(getString(android.R.string.ok)) { _, _ ->
+                        webView.settings.textZoom = (slider.value * 100).roundToInt()
+                    }
+                    .setNegativeButton(getString(android.R.string.cancel), null)
+                    .show()
+            }
+            havingTrouble.setOnClickListener {
+                this@LoginActivity.getAlertDialogBuilder()
+                    .setMessage(getString(R.string.login_problem_solution))
+                    .setPositiveButton(R.string.log_in) { _, _ ->
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, helixAuthUrl.toUri()).apply {
+                                addCategory(Intent.CATEGORY_BROWSABLE)
+                            }
+                            startActivity(intent)
+                            webView.reload()
+                        } catch (e: ActivityNotFoundException) {
+                            Toast.makeText(this@LoginActivity, R.string.no_browser_found, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    .setNeutralButton(R.string.to_enter_url) { _, _ ->
+                        val editText = EditText(this@LoginActivity).apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
+                        }
+                        this@LoginActivity.getAlertDialogBuilder()
+                            .setTitle(R.string.enter_url)
+                            .setView(LinearLayout(this@LoginActivity).apply {
+                                addView(editText)
+                                val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20f, resources.displayMetrics).toInt()
+                                setPadding(padding, 0, padding, 0)
+                            })
+                            .setPositiveButton(R.string.log_in) { _, _ ->
+                                val text = editText.text
+                                if (text.isNotEmpty()) {
+                                    val matcher = tokenPattern.matcher(text)
+                                    if (matcher.find()) {
+                                        val token = matcher.group(1)
+                                        if (!token.isNullOrBlank()) {
+                                            lifecycleScope.launch {
+                                                val valid = validateHelixToken(networkLibrary, helixClientId, token)
+                                                if (valid) {
+                                                    helixToken = token
+                                                    done()
+                                                } else {
+                                                    Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        } else {
+                                            Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupSecondaryWebView(networkLibrary: String?, helixClientId: String?, helixAuthUrl: String, isLightTheme: Boolean) {
+        with(binding) {
+            webView.visibility = View.INVISIBLE
+            secondaryWebView.visibility = View.VISIBLE
+            textZoom.setOnClickListener {
+                val slider = Slider(this@LoginActivity).apply {
+                    value = (secondaryWebView.settings.textZoom.toFloat() / 100)
+                }
+                this@LoginActivity.getAlertDialogBuilder()
+                    .setTitle(getString(R.string.text_size))
+                    .setView(LinearLayout(this@LoginActivity).apply {
+                        addView(slider)
+                        val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10f, resources.displayMetrics).toInt()
+                        setPadding(padding, 0, padding, 0)
+                    })
+                    .setPositiveButton(getString(android.R.string.ok)) { _, _ ->
+                        secondaryWebView.settings.textZoom = (slider.value * 100).roundToInt()
+                    }
+                    .setNegativeButton(getString(android.R.string.cancel), null)
+                    .show()
+            }
+            havingTrouble.text = getString(R.string.next)
+            havingTrouble.setOnClickListener {
+                secondaryWebView.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                havingTrouble.text = getString(R.string.trouble_logging_in)
+                setupButtons(networkLibrary, helixClientId, helixAuthUrl)
+                if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                    CookieManager.getInstance().setCookie("https://www.twitch.tv", "auth-token=$gqlWebToken")
+                }
+                webView.loadUrl("https://www.twitch.tv/activate")
+            }
+            readHeaders2 = true
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                WebViewCompat.setProfile(secondaryWebView, "profile2")
+            } else {
+                CookieManager.getInstance().removeAllCookies(null)
+            }
+            @Suppress("DEPRECATION")
+            if (!isLightTheme) {
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+                    WebSettingsCompat.setForceDark(secondaryWebView.settings, WebSettingsCompat.FORCE_DARK_ON)
+                }
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
+                    WebSettingsCompat.setForceDarkStrategy(secondaryWebView.settings, WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY)
+                }
+            }
+            secondaryWebView.settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                builtInZoomControls = true
+                displayZoomControls = false
+            }
+            secondaryWebView.webChromeClient = WebChromeClient()
+            secondaryWebView.webViewClient = object : WebViewClientCompat() {
+                override fun shouldInterceptRequest(view: WebView, webViewRequest: WebResourceRequest): WebResourceResponse? {
+                    if (readHeaders2) {
+                        val token = webViewRequest.requestHeaders.entries.firstOrNull {
+                            it.key.equals(C.HEADER_TOKEN, true) && !it.value.equals("undefined", true)
+                        }?.value?.removePrefix("OAuth ")
+                        if (!token.isNullOrBlank() && token != gqlWebToken) {
+                            val clientId = webViewRequest.requestHeaders.entries.firstOrNull { it.key.equals(C.HEADER_CLIENT_ID, true) }?.value
+                            if (!clientId.isNullOrBlank() && clientId != gqlWebClientId) {
+                                readHeaders2 = false
+                                lifecycleScope.launch {
+                                    val valid = validateGQLToken(networkLibrary, clientId, token)
+                                    if (valid) {
+                                        gqlClientId = clientId
+                                        gqlToken = token
+                                        done()
+                                    } else {
+                                        if (!helixToken.isNullOrBlank()) {
+                                            done()
+                                        } else {
+                                            error()
+                                            secondaryWebView.visibility = View.GONE
+                                            webView.visibility = View.VISIBLE
+                                            havingTrouble.text = getString(R.string.trouble_logging_in)
+                                            setupButtons(networkLibrary, helixClientId, helixAuthUrl)
+                                            readHeaders = true
+                                            webView.loadUrl("https://www.twitch.tv/login")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return super.shouldInterceptRequest(view, webViewRequest)
+                }
+            }
+            secondaryWebView.loadUrl("https://android.tv.twitch.tv/login")
+        }
+    }
+
     private fun loginIfValidUrl(url: String, networkLibrary: String?, helixClientId: String?, helixAuthUrl: String, apiSetting: Int) {
         with(binding) {
             val matcher = tokenPattern.matcher(url)
@@ -417,8 +504,9 @@ class LoginActivity : AppCompatActivity() {
                 val token = matcher.group(1)
                 if (!token.isNullOrBlank()) {
                     checkUrl = false
-                    webViewContainer.visibility = View.GONE
+                    webView.visibility = View.GONE
                     textZoom.visibility = View.GONE
+                    havingTrouble.visibility = View.GONE
                     progressBar.visibility = View.VISIBLE
                     lifecycleScope.launch {
                         val valid = validateHelixToken(networkLibrary, helixClientId, token)
@@ -426,8 +514,9 @@ class LoginActivity : AppCompatActivity() {
                             if (valid) {
                                 helixToken = token
                             }
-                            webViewContainer.visibility = View.VISIBLE
+                            webView.visibility = View.VISIBLE
                             textZoom.visibility = View.VISIBLE
+                            havingTrouble.visibility = View.VISIBLE
                             progressBar.visibility = View.GONE
                             readHeaders = true
                             webView.loadUrl("https://www.twitch.tv/login")
@@ -484,8 +573,9 @@ class LoginActivity : AppCompatActivity() {
             gqlWebToken = null
             userId = null
             userLogin = null
-            webViewContainer.visibility = View.VISIBLE
+            webView.visibility = View.VISIBLE
             textZoom.visibility = View.VISIBLE
+            havingTrouble.visibility = View.VISIBLE
             progressBar.visibility = View.GONE
         }
     }
