@@ -2,6 +2,8 @@ package com.github.andreyasadchy.xtra.ui.login
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.util.TypedValue
@@ -12,7 +14,6 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -38,6 +39,8 @@ import com.github.andreyasadchy.xtra.util.getAlertDialogBuilder
 import com.github.andreyasadchy.xtra.util.prefs
 import com.github.andreyasadchy.xtra.util.tokenPrefs
 import com.google.android.material.slider.Slider
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -342,9 +345,61 @@ class LoginActivity : AppCompatActivity() {
                     .show()
             }
             havingTrouble.setOnClickListener {
+                val textInput = TextInputLayout(this@LoginActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                textInput.addView(TextInputEditText(textInput.context).apply {
+                    maxLines = 2
+                })
                 this@LoginActivity.getAlertDialogBuilder()
-                    .setMessage(getString(R.string.login_problem_solution))
-                    .setPositiveButton(R.string.log_in) { _, _ ->
+                    .setMessage(getString(R.string.external_login_message))
+                    .setView(LinearLayout(this@LoginActivity).apply {
+                        addView(textInput)
+                        val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20f, resources.displayMetrics).toInt()
+                        setPadding(padding, padding, padding, 0)
+                    })
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        val text = textInput.editText?.text
+                        if (!text.isNullOrBlank()) {
+                            val matcher = tokenPattern.matcher(text)
+                            if (matcher.find()) {
+                                val token = matcher.group(1)
+                                if (!token.isNullOrBlank()) {
+                                    lifecycleScope.launch {
+                                        val valid = validateHelixToken(networkLibrary, helixClientId, token)
+                                        if (valid) {
+                                            helixToken = token
+                                            var getTvToken = false
+                                            this@LoginActivity.getAlertDialogBuilder()
+                                                .setMessage(getString(R.string.external_tv_login_message))
+                                                .setPositiveButton(android.R.string.ok) { _, _ ->
+                                                    getTvToken = true
+                                                }
+                                                .setNegativeButton(getString(android.R.string.cancel), null)
+                                                .setOnDismissListener {
+                                                    if (getTvToken) {
+                                                        setupExternalCodeLogin(networkLibrary, helixClientId, helixAuthUrl)
+                                                    } else {
+                                                        done()
+                                                    }
+                                                }
+                                                .show()
+                                        } else {
+                                            Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                } else {
+                                    Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNeutralButton(R.string.open_url) { _, _ ->
                         try {
                             val intent = Intent(Intent.ACTION_VIEW, helixAuthUrl.toUri()).apply {
                                 addCategory(Intent.CATEGORY_BROWSABLE)
@@ -354,47 +409,6 @@ class LoginActivity : AppCompatActivity() {
                         } catch (e: ActivityNotFoundException) {
                             Toast.makeText(this@LoginActivity, R.string.no_browser_found, Toast.LENGTH_LONG).show()
                         }
-                    }
-                    .setNeutralButton(R.string.to_enter_url) { _, _ ->
-                        val editText = EditText(this@LoginActivity).apply {
-                            layoutParams = LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                LinearLayout.LayoutParams.WRAP_CONTENT
-                            )
-                        }
-                        this@LoginActivity.getAlertDialogBuilder()
-                            .setTitle(R.string.enter_url)
-                            .setView(LinearLayout(this@LoginActivity).apply {
-                                addView(editText)
-                                val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20f, resources.displayMetrics).toInt()
-                                setPadding(padding, 0, padding, 0)
-                            })
-                            .setPositiveButton(R.string.log_in) { _, _ ->
-                                val text = editText.text
-                                if (text.isNotEmpty()) {
-                                    val matcher = tokenPattern.matcher(text)
-                                    if (matcher.find()) {
-                                        val token = matcher.group(1)
-                                        if (!token.isNullOrBlank()) {
-                                            lifecycleScope.launch {
-                                                val valid = validateHelixToken(networkLibrary, helixClientId, token)
-                                                if (valid) {
-                                                    helixToken = token
-                                                    done()
-                                                } else {
-                                                    Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        } else {
-                                            Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                        }
-                                    } else {
-                                        Toast.makeText(this@LoginActivity, R.string.invalid_url, Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                            .setNegativeButton(android.R.string.cancel, null)
-                            .show()
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
@@ -529,6 +543,85 @@ class LoginActivity : AppCompatActivity() {
                                 checkUrl = true
                                 webView.loadUrl(helixAuthUrl)
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun setupExternalCodeLogin(networkLibrary: String?, helixClientId: String?, helixAuthUrl: String) {
+        with(binding) {
+            webView.visibility = View.INVISIBLE
+            havingTrouble.visibility = View.INVISIBLE
+            val gqlClientId = prefs().getString(C.GQL_CLIENT_ID2, "kd1unb4b3q4t58fwlpcbzcbnm76a8fp")
+            var deviceCode: String? = null
+            var userCode: String? = null
+            lifecycleScope.launch {
+                try {
+                    val response = authRepository.getDeviceCode(networkLibrary, "client_id=${gqlClientId}&scopes=channel_read+chat%3Aread+user_blocks_edit+user_blocks_read+user_follows_edit+user_read")
+                    deviceCode = response.deviceCode
+                    userCode = response.userCode
+                    codeText.text = userCode
+                } catch (e: Exception) {
+
+                }
+            }
+            codeText.visibility = View.VISIBLE
+            copyCode.visibility = View.VISIBLE
+            copyCode.setOnClickListener {
+                if (userCode != null) {
+                    val clipboardManager = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboardManager.setPrimaryClip(ClipData.newPlainText("code", userCode))
+                }
+            }
+            openUrl.visibility = View.VISIBLE
+            openUrl.setOnClickListener {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, "https://www.twitch.tv/activate".toUri()).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                    }
+                    startActivity(intent)
+                    webView.reload()
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(this@LoginActivity, R.string.no_browser_found, Toast.LENGTH_LONG).show()
+                }
+            }
+            next.visibility = View.VISIBLE
+            next.setOnClickListener {
+                if (deviceCode != null) {
+                    lifecycleScope.launch {
+                        try {
+                            val response = authRepository.getToken(networkLibrary, "client_id=${gqlClientId}&device_code=${deviceCode}&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code")
+                            val token = response.token
+                            if (!token.isNullOrBlank()) {
+                                val valid = validateGQLToken(networkLibrary, gqlClientId, token)
+                                if (valid) {
+                                    this@LoginActivity.gqlClientId = gqlClientId
+                                    gqlToken = token
+                                    done()
+                                } else {
+                                    if (!helixToken.isNullOrBlank()) {
+                                        done()
+                                    } else {
+                                        error()
+                                        codeText.visibility = View.GONE
+                                        codeText.text = getString(R.string.loading)
+                                        copyCode.visibility = View.GONE
+                                        openUrl.visibility = View.GONE
+                                        next.visibility = View.GONE
+                                        setupButtons(networkLibrary, helixClientId, helixAuthUrl)
+                                        readHeaders = true
+                                        webView.loadUrl("https://www.twitch.tv/login")
+                                    }
+                                }
+                            } else {
+                                response.message?.let {
+                                    Toast.makeText(this@LoginActivity, it, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+
                         }
                     }
                 }
